@@ -6,6 +6,7 @@ import { RealtimeRadio } from './realtimeRadio.js';
 import { RealtimeFacade } from './realtimeFacade.js';
 import { RealtimeCost } from './realtimeCost.js';
 import { RealtimeInput } from './realtimeInput.js';
+import { RealtimeSpeech } from './realtimeSpeech.js';
 
 import { shouldPauseRadioForVoice } from './realtimeProtocol.js';
 import { postDebugLog } from './realtimeDiagnostics.js';
@@ -170,6 +171,33 @@ export class GevRealtimeController extends RealtimeFacade {
         startPendingRadioHandoff: (...args) =>
           this.startPendingRadioHandoff(...args),
         stop: (...args) => this.stop(...args),
+        speakAssistantText: (text) => this.speakAssistantText(text),
+        cancelSpeech: () => this._speech?.cancel(),
+      },
+    });
+    // Text-to-speech voice mode (OPENAI_TTS_VOICE on the server): replies
+    // arrive as text and play here instead of over the WebRTC audio track.
+    this.speechMode = 'realtime';
+    this._speech = new RealtimeSpeech({
+      operations: {
+        recordSpeech: (chars) => this._cost.recordSpeech(chars),
+        debugLog: (...args) => this.debugLog(...args),
+        onPlaying: (audio) => {
+          this.setVoiceSpeaker('ai');
+          // Open-mic sessions mute while a reply plays so the speakers cannot
+          // start a new turn; push-to-talk leaves the mic to the user.
+          if (!this.pushToTalkMode) this.setMicrophoneEnabled(false);
+          try {
+            this.startAssistantVoiceVisualizer(audio.captureStream?.());
+          } catch {
+            /* The meter is optional; playback continues. */
+          }
+        },
+        onIdle: () => {
+          if (!this.isActive()) return;
+          this.setVoiceSpeaker('idle');
+          if (!this.pushToTalkMode) this.setMicrophoneEnabled(true);
+        },
       },
     });
     this._connection = new RealtimeConnection({
@@ -193,6 +221,9 @@ export class GevRealtimeController extends RealtimeFacade {
         fatalError: (...args) => this.fatalError(...args),
         reportError: (...args) => this.reportError(...args),
         handleRealtimeEvent: (...args) => this.handleRealtimeEvent(...args),
+        setSpeechMode: (mode) => {
+          this.speechMode = ['tts', 'text'].includes(mode) ? mode : 'realtime';
+        },
       },
     });
     this._radio.observe();
@@ -201,6 +232,12 @@ export class GevRealtimeController extends RealtimeFacade {
 
   isActive() {
     return this.status !== 'idle' && this.status !== 'error';
+  }
+
+  /** Voice one text reply; only text-to-speech sessions speak this way. */
+  speakAssistantText(text) {
+    if (this.speechMode === 'tts' && !this.isSessionEnding())
+      this._speech.speak(text);
   }
 
   // Fatal error path: tear the session down (stop tracks, close pc/dc, kill the
@@ -227,11 +264,12 @@ export class GevRealtimeController extends RealtimeFacade {
     this.cancelPushToTalkHold();
     this._radio.invalidateHandoff();
     this._turns.abortTools();
+    this._speech?.cancel();
     this._radio.stopHandoff({ preserveRadioPlayback });
     this.clearDisconnectGrace();
     // Guard against the dc.close() below re-entering our own error handlers while
     // we're intentionally tearing down (the close/error listeners bail on this
-    // flag) — H8.
+    // flag) â€” H8.
     this._connection.beginTeardown();
     this.debugLog('session.stop', {
       removeUi,
@@ -323,13 +361,13 @@ export class GevRealtimeController extends RealtimeFacade {
   /* ---------------- voice cost control ---------------- */
 
   /**
-   * Is this session terminating (spend cap reached)? Latched — never clears
+   * Is this session terminating (spend cap reached)? Latched â€” never clears
    * until the next start().
    *
    * IN-FLIGHT TOOLS RUN TO COMPLETION, AND ARE NOT ROLLED BACK. A tool already
    * executing when the cap trips may finish its map mutation (a camera flight,
    * a layer toggle, an annotation). That is deliberate: unwinding a partially
-   * applied map change has no safe general implementation — a half-reverted
+   * applied map change has no safe general implementation â€” a half-reverted
    * camera/layer/annotation state is worse than a completed one, and the tool
    * abort signal is advisory (most actions do not check it). What the latch DOES
    * guarantee is that no NEW tool is dispatched once the cap has tripped.
@@ -339,7 +377,7 @@ export class GevRealtimeController extends RealtimeFacade {
   }
 
   /**
-   * Is the voice session FULLY settled — no live session and no transport left?
+   * Is the voice session FULLY settled â€” no live session and no transport left?
    *
    * Replacing the cost tracker is only legal here. `!isActive()` alone is not
    * enough: the 'error' status reports inactive while the data/peer connection

@@ -49,16 +49,19 @@ export class RealtimeConnection {
   get status() {
     return this.readStatus();
   }
-  async start({ pushToTalk = false } = {}) {
+  async start({ pushToTalk = false, textOnly = false } = {}) {
     if (this.isActive() || this.lifetimeSignal?.aborted) return;
-    this.pauseRadioForVoice();
+    if (!textOnly) this.pauseRadioForVoice();
     const pushToTalkKeyHeld = pushToTalk && this.input.pushToTalkKeyHeld;
     const spaceKeyHeld = this.input.spaceKeyHeld;
     this.stop({ preserveStatus: true });
     this.input.pushToTalkMode = pushToTalk;
     this.input.pushToTalkKeyHeld = pushToTalkKeyHeld;
     this.input.spaceKeyHeld = spaceKeyHeld;
-    if (!window.RTCPeerConnection || !navigator.mediaDevices?.getUserMedia) {
+    if (
+      !window.RTCPeerConnection ||
+      (!textOnly && !navigator.mediaDevices?.getUserMedia)
+    ) {
       this.setStatus('error', 'WebRTC microphone support unavailable');
       return;
     }
@@ -78,7 +81,10 @@ export class RealtimeConnection {
     // — this is what "applies next session" means.
     this.cost.prepareSession();
     this.syncCostUi();
-    this.setStatus('connecting', 'Requesting microphone');
+    this.setStatus(
+      'connecting',
+      textOnly ? 'Connecting' : 'Requesting microphone',
+    );
     this.debugLog('session.starting', {
       epoch,
       tier: this.cost.voiceTier,
@@ -89,6 +95,7 @@ export class RealtimeConnection {
     try {
       const minted = await this.backend.requestToken({
         tier: this.cost.voiceTier,
+        textOnly,
         signal,
       });
       const token = minted.token;
@@ -97,6 +104,7 @@ export class RealtimeConnection {
       // (OPENAI_REALTIME_MODEL[_MINI]) can point a tier at a different model,
       // and pricing by the tier we asked for would then under-meter and let the
       // cap be overrun. Unrecognised ids bill at worst-case rates.
+      this.setSpeechMode?.(minted.speech);
       const costState = this.cost.bindServedModel(minted.model);
       if (!costState.ratesRecognized) {
         console.warn(
@@ -112,32 +120,38 @@ export class RealtimeConnection {
         servedTier: minted.tier || null,
         ratesRecognized: costState.ratesRecognized,
       });
-      localStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          channelCount: 1,
-        },
-      });
-      if (this.abandonStart(epoch, { localStream, localPc })) return;
-      this.stream = localStream;
-      this.setMicrophoneEnabled(
-        !this.input.pushToTalkMode || this.input.pushToTalkKeyHeld,
-      );
-      this.startVoiceVisualizer(localStream);
+      // The typed command bar never touches the microphone.
+      if (!textOnly) {
+        localStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+            channelCount: 1,
+          },
+        });
+        if (this.abandonStart(epoch, { localStream, localPc })) return;
+        this.stream = localStream;
+        this.setMicrophoneEnabled(
+          !this.input.pushToTalkMode || this.input.pushToTalkKeyHeld,
+        );
+        this.startVoiceVisualizer(localStream);
 
-      document
-        .querySelectorAll('audio[data-gev-realtime-audio="true"]')
-        .forEach((el) => el.remove());
-      this.audioEl = document.createElement('audio');
-      this.audioEl.autoplay = true;
-      this.audioEl.dataset.gevRealtimeAudio = 'true';
-      this.audioEl.style.display = 'none';
-      document.body.appendChild(this.audioEl);
+        document
+          .querySelectorAll('audio[data-gev-realtime-audio="true"]')
+          .forEach((el) => el.remove());
+        this.audioEl = document.createElement('audio');
+        this.audioEl.autoplay = true;
+        this.audioEl.dataset.gevRealtimeAudio = 'true';
+        this.audioEl.style.display = 'none';
+        document.body.appendChild(this.audioEl);
+      }
 
       localPc = new RTCPeerConnection();
       this.pc = localPc;
+      // The Realtime SDP answer expects an audio section; text sessions offer
+      // a receive-only one and send nothing on it.
+      if (textOnly) localPc.addTransceiver('audio', { direction: 'recvonly' });
       const ownsConnection = () =>
         epoch === this.startEpoch && this.pc === localPc && !signal.aborted;
       this.pc.ontrack = (event) => {
@@ -166,7 +180,7 @@ export class RealtimeConnection {
         });
       };
       this.stream
-        .getTracks()
+        ?.getTracks()
         .forEach((track) => this.pc.addTrack(track, this.stream));
 
       const dataChannel = this.pc.createDataChannel('oai-events');
@@ -174,11 +188,13 @@ export class RealtimeConnection {
       const ownsChannel = () => ownsConnection() && this.dc === dataChannel;
       dataChannel.addEventListener('open', () => {
         if (!ownsChannel()) return;
-        const detail = this.input.pushToTalkMode
-          ? this.input.pushToTalkKeyHeld
-            ? 'Release Space to send'
-            : 'Hold Space to talk'
-          : 'Ask or command';
+        const detail = textOnly
+          ? 'Type a command'
+          : this.input.pushToTalkMode
+            ? this.input.pushToTalkKeyHeld
+              ? 'Release Space to send'
+              : 'Hold Space to talk'
+            : 'Ask or command';
         this.setStatus('listening', detail);
         this.debugLog('data_channel.open', {
           connection: this.connectionDiagnostics(dataChannel),

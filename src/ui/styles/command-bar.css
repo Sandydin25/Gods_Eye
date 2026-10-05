@@ -1,0 +1,132 @@
+/* Typed AI command bar: floats above the command dock; dictation tools such as
+   Wispr Flow type straight into its input. */
+
+#gev-command-bar {
+  position: fixed;
+  bottom: calc(2vh + 5.4rem);
+  left: 50%;
+  /* Z ladder: panels 100-139, dock 145, voice pill 150, this 155, toast 200 */
+  z-index: 155;
+  width: min(640px, calc(100vw - 32px));
+  transform: translateX(-50%);
+  padding: 8px 10px;
+  color: var(--text-primary);
+  background: var(--glass-bg);
+  border: 1px solid rgba(0, 212, 255, 0.32);
+  border-radius: var(--btn-radius);
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.5),
+    0 0 20px rgba(0, 212, 255, 0.1);
+  backdrop-filter: blur(24px) saturate(1.4);
+  -webkit-backdrop-filter: blur(24px) saturate(1.4);
+  font-family: var(--font-mono);
+  pointer-events: auto;
+}
+
+#gev-command-bar[hidden] {
+  display: none;
+}
+
+#gev-command-bar[data-state='working'] {
+  border-color: rgba(255, 220, 120, 0.55);
+}
+
+#gev-command-bar[data-state='error'] {
+  border-color: rgba(255, 99, 99, 0.6);
+}
+
+#gev-command-bar .gev-command-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#gev-command-bar .gev-command-kicker {
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+}
+
+#gev-command-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 8px 10px;
+  color: var(--text-primary);
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  outline: none;
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+#gev-command-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-dim);
+}
+
+#gev-command-input::placeholder {
+  color: var(--text-dim);
+}
+
+#gev-command-bar button {
+  flex: 0 0 auto;
+  height: 32px;
+  padding: 0 12px;
+  color: var(--accent);
+  background: rgba(0, 212, 255, 0.06);
+  border: 1px solid rgba(0, 212, 255, 0.28);
+  border-radius: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+#gev-command-bar button:hover {
+  color: #ffffff;
+  border-color: var(--accent);
+}
+
+#gev-command-bar .gev-command-close {
+  padding: 0 9px;
+  color: var(--text-secondary);
+  border-color: var(--glass-border);
+  background: transparent;
+}
+
+#gev-command-bar .gev-command-log {
+  display: none;
+  margin-top: 8px;
+  padding: 0 2px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+#gev-command-bar.has-log .gev-command-log {
+  display: block;
+}
+
+#gev-command-bar .gev-command-you {
+  color: var(--text-secondary);
+}
+
+#gev-command-bar .gev-command-you::before {
+  content: '› ';
+  color: var(--accent);
+}
+
+#gev-command-bar .gev-command-reply {
+  margin-top: 3px;
+  color: var(--text-primary);
+  max-height: 8.5em;
+  overflow-y: auto;
+}
+
+#gev-command-bar[data-state='error'] .gev-command-reply {
+  color: #ff8a8a;
+}
+
+body.recording-mode #gev-command-bar {
+  display: none;
+}

@@ -13,6 +13,7 @@ import {
 } from './constants.js';
 import { realtimeInstructions } from './instructions.js';
 import { GEV_REALTIME_TOOLS } from './tools.js';
+import { ttsVoice } from './speech.js';
 
 function createRealtimeTokenHandler({
   annotationGuidance,
@@ -118,6 +119,30 @@ function createRealtimeTokenHandler({
         tool_choice: 'auto',
       },
     };
+    // Text-to-speech voice mode: answer in text; the browser voices each reply
+    // through /api/realtime/speech with OPENAI_TTS_VOICE.
+    // ?mode=text is the typed command bar: no microphone, replies shown as text.
+    const textMode = (() => {
+      try {
+        return (
+          new URL(req.url || '', 'http://localhost').searchParams.get(
+            'mode',
+          ) === 'text'
+        );
+      } catch {
+        return false;
+      }
+    })();
+    const speechMode = textMode ? 'text' : ttsVoice() ? 'tts' : 'realtime';
+    if (speechMode === 'text') {
+      sessionConfig.session.output_modalities = ['text'];
+      sessionConfig.session.instructions +=
+        '\nThe user types commands (often dictated) and reads your replies on screen: reply in short plain sentences, with no markdown, lists or emoji.';
+    } else if (speechMode === 'tts') {
+      sessionConfig.session.output_modalities = ['text'];
+      sessionConfig.session.instructions +=
+        '\nYour replies are converted to speech: write plain spoken sentences only, with no markdown, lists, symbols or emoji.';
+    }
 
     try {
       const response = await fetchImpl(endpoint, {
@@ -139,6 +164,7 @@ function createRealtimeTokenHandler({
       // case where a bogus ?tier= was silently downgraded to standard.
       res.setHeader('X-GEV-Voice-Tier', tier);
       res.setHeader('X-GEV-Voice-Model', model);
+      res.setHeader('X-GEV-Voice-Speech', speechMode);
       if (requestedTier && !isKnownVoiceTier(requestedTier)) {
         res.setHeader('X-GEV-Voice-Tier-Fallback', '1');
       }

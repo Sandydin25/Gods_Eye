@@ -24,6 +24,11 @@ import {
 } from '../data/contextStore.js';
 import { CCTV_FOCUS_RESULT } from '../layers/cctv/index.js';
 import { contextModeWord } from '../contextModePolicy.js';
+import {
+  houseNumberOf,
+  isStreetAddressQuery,
+  labelMatchesAddress,
+} from '../addressGeocode.js';
 import { createAnalystEngine } from '../data/analystEngine.js';
 import { layerFeedState } from '../data/feedState.js';
 import {
@@ -3027,7 +3032,7 @@ async function flyToRequestedLocation(
       typeof beginDeferred === 'function' ? beginDeferred() : null;
     if (generation === false) return cancelled(query);
     const managedDeferred = typeof reassertDeferred === 'function';
-    const destination = await searchNavigation(viewer, query, {
+    const navigationOptions = {
       placeSearch,
       signal,
       ...(rangeM ? { range: rangeM } : {}),
@@ -3039,8 +3044,16 @@ async function flyToRequestedLocation(
       ...arrivalHooks,
       beforeFly: managedDeferred ? () => reassertDeferred(generation) : null,
       onStart: managedDeferred ? null : onStart,
-    });
+    };
+    const destination = await searchNavigation(
+      viewer,
+      query,
+      navigationOptions,
+    );
     if (destination?.cancelled) return cancelled(query);
+    const houseNumber = isStreetAddressQuery(query)
+      ? houseNumberOf(query)
+      : null;
     const response = {
       ok: Boolean(destination),
       action: 'fly_to_location',
@@ -3049,6 +3062,16 @@ async function flyToRequestedLocation(
       navigationMode: destination?.navigationMode || null,
       rangeM: destination?.rangeM || rangeM || null,
     };
+    // A street address answered by a place without its house number (a
+    // street, a bus stop, a district) is a guess; the model must say so.
+    // House numbers are the part speech recognition most often gets wrong.
+    if (houseNumber && !destination) {
+      response.addressNotFound = true;
+      response.note = `No address ${houseNumber} was found there, and the camera did not move. The number may have been misheard: read it back digit by digit and ask the user to confirm or correct it.`;
+    } else if (houseNumber && !labelMatchesAddress(query, response.label)) {
+      response.approximate = true;
+      response.note = `House number ${houseNumber} was not found; the camera went to the nearest match instead. Say it is approximate, read the number back digit by digit, and ask the user to confirm or correct it.`;
+    }
     return afterArrival(response, response.label);
   }
 

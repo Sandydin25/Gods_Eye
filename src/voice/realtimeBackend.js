@@ -15,11 +15,13 @@ export function createRealtimeBackend({
     );
   return Object.freeze({
     protocol: 'openai-realtime',
-    async requestToken({ tier = DEFAULT_VOICE_TIER, signal } = {}) {
+    async requestToken({ tier = DEFAULT_VOICE_TIER, textOnly = false, signal } = {}) {
       signal = scoped(signal);
       signal.throwIfAborted();
       const separator = tokenEndpoint.includes('?') ? '&' : '?';
-      const url = `${tokenEndpoint}${separator}tier=${encodeURIComponent(resolveVoiceModel(tier).tier)}`;
+      const url =
+        `${tokenEndpoint}${separator}tier=${encodeURIComponent(resolveVoiceModel(tier).tier)}` +
+        (textOnly ? '&mode=text' : '');
       const response = await tokenTransport(url, {
         signal,
         cache: 'no-store',
@@ -56,6 +58,12 @@ export function createRealtimeBackend({
           data?.session?.model ||
           null,
         tier: response.headers?.get?.('X-GEV-Voice-Tier') || null,
+        // 'tts' when the session answers in text for the speech route to voice.
+        speech: ['tts', 'text'].includes(
+          response.headers?.get?.('X-GEV-Voice-Speech'),
+        )
+          ? response.headers.get('X-GEV-Voice-Speech')
+          : 'realtime',
         expiresAt,
       };
     },

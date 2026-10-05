@@ -6,6 +6,7 @@ import { createGoogleGeocoder } from './google.js';
 import { createPhotonGeocoder } from '../keylessGeocoder.js';
 import { createCoordinateGeocoder } from './coordinateGeocoder.js';
 import { createPresetGeocoder } from './presetGeocoder.js';
+import { isStreetAddressQuery } from '../addressGeocode.js';
 
 /**
  * Coordinates and bundled names first — both answer offline and with no key —
@@ -52,6 +53,18 @@ export function createDefaultPlaceSearch({
                 url.searchParams.set('key', key);
                 if (bias) url.searchParams.set('bounds', bias);
                 return fetchImpl(url.toString(), { signal });
+              },
+            }),
+            // US street addresses: the keyless Census route is house-number
+            // accurate where OpenStreetMap-based search only finds the street.
+            createGoogleGeocoder({
+              request(query, { signal }) {
+                if (!isStreetAddressQuery(query)) return null;
+                const params = new URLSearchParams({ q: query });
+                return fetchImpl(
+                  `${endpoints.address || '/api/address-geocode'}?${params}`,
+                  { signal },
+                );
               },
             }),
             createPhotonGeocoder({ fetchImpl, endpoint: endpoints.photon }),

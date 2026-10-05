@@ -16,8 +16,21 @@ const OPENAI_REALTIME_CONTEXT_RETENTION_DEFAULT = 0.5;
 
 const OPENAI_HUD_SUMMARY_MODEL_DEFAULT = 'gpt-5-nano';
 
+// Text-to-speech voice mode (OPENAI_TTS_VOICE): the Realtime session answers in
+// text and these speak it, so voices the Realtime API lacks (fable) are usable.
+const OPENAI_TTS_MODEL_DEFAULT = 'gpt-4o-mini-tts';
+
+const OPENAI_TTS_INSTRUCTIONS_DEFAULT =
+  'Speak as a calm, refined British butler: crisp Received Pronunciation, measured pace, composed and quietly warm, with dry understatement. Never theatrical.';
+
+/** Longest reply the speech route will voice, in characters. */
+const OPENAI_TTS_MAX_CHARS = 1200;
+
 export {
   OPENAI_HUD_SUMMARY_MODEL_DEFAULT,
+  OPENAI_TTS_MODEL_DEFAULT,
+  OPENAI_TTS_INSTRUCTIONS_DEFAULT,
+  OPENAI_TTS_MAX_CHARS,
   OPENAI_REALTIME_MODEL_MINI_DEFAULT,
   OPENAI_REALTIME_MODEL_DEFAULT,
   OPENAI_REALTIME_VOICE_DEFAULT,

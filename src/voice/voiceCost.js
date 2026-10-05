@@ -342,6 +342,23 @@ export function estimateUsageCostUsd(usage, rates) {
   return Number.isFinite(usd) && usd > 0 ? usd : 0;
 }
 
+/**
+ * Text-to-speech voice mode estimate. OpenAI bills gpt-4o-mini-tts by tokens,
+ * roughly $0.015 per minute of speech; about 900 characters are spoken per
+ * minute. Rounded up so the spend cap errs early, never late.
+ */
+export const SPEECH_USD_PER_MINUTE = 0.015;
+export const SPEECH_CHARS_PER_MINUTE = 900;
+
+/** Estimated USD to voice `chars` characters of reply text. */
+export function estimateSpeechCostUsd(chars) {
+  const n = nonNegative(chars);
+  return n
+    ? (Math.ceil(n / 100) * 100 * SPEECH_USD_PER_MINUTE) /
+        SPEECH_CHARS_PER_MINUTE
+    : 0;
+}
+
 /** Format a running cost for the compact UI readout ("~$0.42"). */
 export function formatCostUsd(usd) {
   const n = Number.isFinite(Number(usd)) ? Math.max(0, Number(usd)) : 0;
@@ -430,10 +447,16 @@ export function createVoiceCostTracker(options = {}) {
      */
     record(usage) {
       const usd = estimateUsageCostUsd(usage, model.rates);
-      if (usd > 0) {
-        totalUsd += usd;
-        responses += 1;
-      }
+      if (usd > 0) responses += 1;
+      return this.addUsd(usd);
+    },
+    /**
+     * Fold a cost that is not a Realtime response (text-to-speech playback)
+     * into the session total, through the same warn/cap latches.
+     * @param {number} usd
+     */
+    addUsd(usd) {
+      if (usd > 0 && Number.isFinite(usd)) totalUsd += usd;
       let warnCrossed = false;
       let capCrossed = false;
       if (!warned && totalUsd >= limits.warnUsd) {

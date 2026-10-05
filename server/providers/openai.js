@@ -2,6 +2,7 @@ import { defaultSourceRoot } from './common/source-root.js';
 import { handleHudSummary } from './openai/hud-summary.js';
 import { createDebugLogHandler } from './openai/debug-log.js';
 import { createRealtimeTokenHandler } from './openai/realtime.js';
+import { createSpeechHandler } from './openai/speech.js';
 import { sameSiteGated } from './common/same-site.js';
 
 /**
@@ -31,6 +32,8 @@ function openAiRealtimeProxy({
         createRealtimeTokenHandler({ ...realtime, annotationGuidance }),
       ),
     );
+
+    middlewares.use('/api/realtime/speech', sameSiteGated(createSpeechHandler()));
   }
 
   return {

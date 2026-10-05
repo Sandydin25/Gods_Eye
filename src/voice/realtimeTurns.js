@@ -10,6 +10,9 @@ import {
   parseArguments,
 } from './realtimeProtocol.js';
 
+/** Retries for one turn refused on OpenAI's tokens-per-minute limit. */
+const RATE_LIMIT_MAX_RETRIES = 3;
+
 /** Own response sequencing, tool execution, deduplication and superseded intent. */
 export class RealtimeTurns {
   constructor({
@@ -61,7 +64,7 @@ export class RealtimeTurns {
     return this.readRadioLayer();
   }
   /**
-   * Inject a background MAP EVENT into the conversation as a system item — e.g. a
+   * Inject a background MAP EVENT into the conversation as a system item â€” e.g. a
    * deferred annotation outline that resolved or failed after its tool result
    * already returned. Deliberately NO response.create: the model reads it on its
    * next turn and can confirm or correct without talking over the user. The
@@ -90,6 +93,7 @@ export class RealtimeTurns {
     const cleanText = String(text || '').trim();
     if (!cleanText) return;
     this.cancelRadioHandoff({ abortTools: true });
+    this.cancelSpeech?.();
     this.supersedeActiveResponseForUserTurn();
     const itemEvent = {
       type: 'conversation.item.create',
@@ -109,7 +113,7 @@ export class RealtimeTurns {
    *
    * `cancelRadioHandoff({abortTools:true})` aborts tools already RUNNING, but
    * a function call belonging to the old response can still arrive afterwards
-   * and would be dispatched — a stale `fly_to_location` mutating the map after
+   * and would be dispatched â€” a stale `fly_to_location` mutating the map after
    * the operator typed "stop". Marking the response superseded refuses those
    * on arrival.
    *
@@ -211,8 +215,8 @@ export class RealtimeTurns {
         return;
       }
       // A conversation.item.delete for a stale viewport screenshot can land
-      // AFTER the server already truncated that item → an item_not_found error.
-      // That's a benign race from our own housekeeping, not a session failure —
+      // AFTER the server already truncated that item â†’ an item_not_found error.
+      // That's a benign race from our own housekeeping, not a session failure â€”
       // do NOT flip the demo to ERROR (M14). Match either the code or the echoed
       // event_id of a delete we issued.
       if (this.viewport.consumeDeleteError(payload)) {
@@ -245,7 +249,18 @@ export class RealtimeTurns {
       this.userTurnPending = true;
       this.pendingResponseInstructions = null;
       this.cancelRadioHandoff({ abortTools: true });
+      this.cancelSpeech?.();
       this.setVoiceSpeaker('user');
+    }
+    // Text-to-speech voice mode: a finished text reply is voiced by the
+    // speech route (a no-op when the session speaks for itself).
+    if (
+      (payload.type === 'response.output_text.done' ||
+        payload.type === 'response.text.done') &&
+      !this.userTurnPending &&
+      !this.isSupersededResponse(payload.response_id || null)
+    ) {
+      this.speakAssistantText?.(payload.text);
     }
     this.updateResponseState(payload);
     // The spend cap may have just ended the session from inside the usage
@@ -263,7 +278,7 @@ export class RealtimeTurns {
         return;
       }
       // The first response.done closes the tool-call response. Only then may
-      // the queued follow-up speak “Turning on the radio.” Keep the prepared
+      // the queued follow-up speak â€œTurning on the radio.â€ Keep the prepared
       // result pending until that distinct spoken response also completes.
       if (this.pendingResponseInstructions) {
         this.flushPendingResponse();
@@ -282,12 +297,12 @@ export class RealtimeTurns {
 
     // Session-ending latch (spend cap). Function-call events arrive BEFORE the
     // response.done that carries usage, so tools can already be queued when the
-    // cap trips. Refuse to dispatch any NEW tool once the session is ending —
+    // cap trips. Refuse to dispatch any NEW tool once the session is ending â€”
     // its results could never be sent back anyway (the data channel is closed).
     // Spend-cap gate, at the dispatch site. `extractFunctionCalls` yields AT
     // MOST ONE call per event (one `response.function_call_arguments.done` or
     // one `response.output_item.done`), so this single check covers the whole
-    // batch — there is no reachable mid-batch window, and a per-iteration
+    // batch â€” there is no reachable mid-batch window, and a per-iteration
     // re-check would be untestable dead code. If the extractor ever returns
     // multiple calls, restore a per-iteration check inside the loop below.
     if (this.isSessionEnding()) {
@@ -297,7 +312,7 @@ export class RealtimeTurns {
 
     const toolResponseId = payload.response_id || payload.response?.id || null;
     // A newer typed command superseded the response these calls belong to.
-    // They are stale intent — dispatching one would let the old turn mutate
+    // They are stale intent â€” dispatching one would let the old turn mutate
     // the map after the operator asked for something else.
     //
     // Refusing is not the same as ignoring. Every function call MUST be
@@ -305,7 +320,7 @@ export class RealtimeTurns {
     // pending call in the conversation and deadlocks the model (the same
     // hazard `callDedupeKeys` is written to avoid). So each refused call gets
     // a terminal output saying plainly that the turn moved on. No
-    // `response.create` follows — the deferred typed turn is the single answer.
+    // `response.create` follows â€” the deferred typed turn is the single answer.
     if (this.isSupersededResponse(toolResponseId)) {
       this.pruneProcessedCalls();
       for (const call of calls) {
@@ -317,7 +332,7 @@ export class RealtimeTurns {
           action: call.name,
           superseded: true,
           error:
-            'Superseded by a newer command from the operator — this call was not run.',
+            'Superseded by a newer command from the operator â€” this call was not run.',
         });
       }
       this.debugLog('tool.call.skipped_superseded', {
@@ -559,7 +574,7 @@ export class RealtimeTurns {
     }
     if (sentOutput && this.dc?.readyState === 'open') {
       // The viewport-image send is best-effort context. It must never block the
-      // response — a throw here would strand the turn at EXECUTING (M13). Guard
+      // response â€” a throw here would strand the turn at EXECUTING (M13). Guard
       // it so queueResponseCreate always runs, image or not.
       try {
         await this.sendVisualContextIfUseful(lastResult);
@@ -626,11 +641,15 @@ export class RealtimeTurns {
       // final audio packets. Return the UI styling to idle now, but keep the
       // meter on the remote stream until the next user turn or session stop.
       this.setVoiceSpeaker('idle', { keepVisualizerSpeaker: true });
-      // A failed response is otherwise swallowed here — the assistant just goes
+      // A failed response is otherwise swallowed here â€” the assistant just goes
       // mute with no feedback (H9/H3). Surface the reason so the user knows why.
+      if (responseStatus === 'completed') this.rateLimitRetries = 0;
       if (responseStatus === 'failed') {
         const details = payload.response?.status_details || null;
         const failErr = details?.error || null;
+        // A per-minute token limit is a wait, not a failure: retry the same
+        // turn once the window the error names has passed.
+        if (this.retryAfterRateLimit(failErr)) return;
         this.reportError('Realtime response failed', failErr, {
           responseId: payload.response?.id || payload.response_id || null,
           statusReason: details?.reason || null,
@@ -638,7 +657,7 @@ export class RealtimeTurns {
           code: failErr?.code || null,
           ...this.connectionDiagnostics(),
         });
-        // Don't trap the whole session in 'error' for one bad response — the
+        // Don't trap the whole session in 'error' for one bad response â€” the
         // connection is still live. Recover to listening so the user can retry
         // (mirrors the transient-blip philosophy, H8).
         if (this.dc?.readyState === 'open') {
@@ -647,7 +666,7 @@ export class RealtimeTurns {
       }
       if (!this.radio.pendingRadioPlaybackResult) {
         // A typed command deferred behind this response is the operator's own
-        // turn — answer it before any tool-result follow-up.
+        // turn â€” answer it before any tool-result follow-up.
         if (this.pendingUserTextResponse) this.requestUserTextResponse();
         else this.flushPendingResponse();
       }
@@ -657,6 +676,55 @@ export class RealtimeTurns {
       this.responseActive = true;
       this.pauseRadioForVoice();
     }
+  }
+
+  /**
+   * Schedule a retry for a response OpenAI refused on its tokens-per-minute
+   * limit. Returns false (so the error is reported) for anything else or once
+   * the retries are spent.
+   * @param {object|null} failErr `status_details.error` of the failed response.
+   * @returns {boolean}
+   */
+  retryAfterRateLimit(failErr) {
+    if (failErr?.code !== 'rate_limit_exceeded') return false;
+    if ((this.rateLimitRetries || 0) >= RATE_LIMIT_MAX_RETRIES) return false;
+    if (!this.dc || this.dc.readyState !== 'open') return false;
+    this.rateLimitRetries = (this.rateLimitRetries || 0) + 1;
+    const seconds = Number(
+      String(failErr.message || '').match(/try again in ([\d.]+)\s*s/i)?.[1],
+    );
+    const waitMs = Math.min(
+      30_000,
+      Math.max(1_000, (Number.isFinite(seconds) ? seconds : 5) * 1000 + 750),
+    );
+    this.setStatus(
+      'listening',
+      `OpenAI rate limit — retrying in ${Math.ceil(waitMs / 1000)}s`,
+    );
+    this.debugLog('response.rate_limited.retry', {
+      attempt: this.rateLimitRetries,
+      waitMs,
+    });
+    clearTimeout(this.rateLimitTimer);
+    const channel = this.dc;
+    this.rateLimitTimer = setTimeout(() => {
+      this.rateLimitTimer = null;
+      if (
+        this.dc !== channel ||
+        channel.readyState !== 'open' ||
+        this.responseActive ||
+        this.responseCreatePending ||
+        this.userTurnPending
+      )
+        return;
+      this.responseCreatePending = true;
+      const sent = this.sendRealtimeEvent(
+        { type: 'response.create' },
+        'client.response_create.rate_limit_retry',
+      );
+      if (!sent) this.responseCreatePending = false;
+    }, waitMs);
+    return true;
   }
 
   queueResponseCreate(instructions) {
@@ -703,6 +771,9 @@ export class RealtimeTurns {
   }
 
   reset() {
+    clearTimeout(this.rateLimitTimer);
+    this.rateLimitTimer = null;
+    this.rateLimitRetries = 0;
     this.processedCalls.clear();
     this.responseActive = false;
     this.responseCreatePending = false;

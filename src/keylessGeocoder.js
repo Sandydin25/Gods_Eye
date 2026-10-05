@@ -1,4 +1,6 @@
 /** Photon/OpenStreetMap place-search adapter. */
+import { isStreetAddressQuery } from './addressGeocode.js';
+
 const PHOTON_ENDPOINT = 'https://photon.komoot.io/api/';
 
 /** Photon is a courtesy service; fail fast rather than hold the search open. */
@@ -363,9 +365,13 @@ export async function geocodeKeylessWithOutcome(
       // convention every geocoder's free-text field follows. The head segment is
       // the thing being searched for; the tail only says where to look.
       const head = normalizeToponym(trimmed.split(',')[0]);
+      // A query carrying numbers (a street address, "West 31st Avenue") that
+      // matched no name is not answered by whatever ranked first: Photon's
+      // text match ignores digits, so that is a bus stop or West 14th Avenue.
+      // Leave it to the next geocoder rather than fly somewhere else.
       feature =
         selectPhotonFeature(anywhere, head, { allowContains: true }) ||
-        anywhere[0];
+        (isStreetAddressQuery(trimmed) || /\d/.test(head) ? null : anywhere[0]);
     }
   }
 

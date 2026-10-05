@@ -8,6 +8,7 @@ import {
   createVoiceCostTracker,
   resolveVoiceModel,
   formatCostUsd,
+  estimateSpeechCostUsd,
 } from './voiceCost.js';
 
 /** Own next-session preferences and the immutable-model session cost meter. */
@@ -136,7 +137,17 @@ export class RealtimeCost {
    */
   recordUsage(usage) {
     if (!usage) return null;
-    const state = this.costTracker.record(usage);
+    return this.applyCostState(this.costTracker.record(usage));
+  }
+
+  /** Fold one text-to-speech reply's estimated cost into the session meter. */
+  recordSpeech(chars) {
+    const usd = estimateSpeechCostUsd(chars);
+    if (!usd) return null;
+    return this.applyCostState(this.costTracker.addUsd(usd));
+  }
+
+  applyCostState(state) {
     this.syncCostUi();
     if (state.warnCrossed) {
       // Exactly one line — the latch in the tracker guarantees it.

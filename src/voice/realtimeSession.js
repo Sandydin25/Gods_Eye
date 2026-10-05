@@ -20,7 +20,7 @@ export function createRealtimeSession({
     sendText: (text) => controller.sendTextCommand(text),
     sendMapEvent: (event) => controller.notifyMapEvent(event),
     ignoreButtonClick: () => Boolean(controller.spaceKeyHeld),
-    bindControls() {
+    bindControls({ pushToTalk = true } = {}) {
       if (controller.ui.tierButton) {
         controller.tierHandler = () => controller.toggleVoiceTier();
         controller.ui.tierButton.addEventListener(
@@ -29,7 +29,8 @@ export function createRealtimeSession({
         );
       }
       controller.syncCostUi();
-      controller.bindPushToTalkShortcut();
+      // Typed-command mode leaves Space alone: holding it must not open a mic.
+      if (pushToTalk) controller.bindPushToTalkShortcut();
     },
   };
 }

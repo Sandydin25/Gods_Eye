@@ -6,6 +6,10 @@ import {
   nominatimToGeocodeResult,
   nominatimViewboxFromBounds,
 } from '../../../src/nominatimGeocode.js';
+import {
+  censusToGeocodeResult,
+  isStreetAddressQuery,
+} from '../../../src/addressGeocode.js';
 
 /**
  * The usage policy for the public Nominatim instance asks for a User-Agent or
@@ -179,8 +183,50 @@ export function createNominatimSearchProvider({
 
 export const fetchNominatimSearch = createNominatimSearchProvider();
 
+/**
+ * Street-address search over the US Census Bureau geocoder (keyless, public
+ * domain). Only house-number queries are sent; answers are cached.
+ */
+export function createCensusAddressProvider({
+  endpoint = 'https://geocoding.geo.census.gov/geocoder/locations/onelineaddress',
+  requestJson = fetchRegionalJson,
+} = {}) {
+  const cache = new Map();
+  const inFlight = new Map();
+  return async function fetchCensusAddress(query) {
+    const cacheKey = query.toLowerCase();
+    const cached = cache.get(cacheKey);
+    if (cached && Date.now() - cached.cachedAt <= NOMINATIM_SEARCH_CACHE_MS)
+      return { ...cached.payload, cached: true };
+    const { promise } = coalesceProxyRequest(inFlight, cacheKey, async () => {
+      const params = new URLSearchParams({
+        address: query,
+        benchmark: 'Public_AR_Current',
+        format: 'json',
+      });
+      const data = await requestJson(`${endpoint}?${params}`, {
+        redirect: 'error',
+      });
+      const result = censusToGeocodeResult(data?.result?.addressMatches?.[0]);
+      const payload = result
+        ? { status: 'OK', results: [result] }
+        : { status: 'ZERO_RESULTS', results: [] };
+      cache.set(cacheKey, { payload, cachedAt: Date.now() });
+      while (cache.size > NOMINATIM_SEARCH_MAX_CACHE)
+        cache.delete(cache.keys().next().value);
+      return payload;
+    });
+    return await promise;
+  };
+}
+
+export const fetchCensusAddress = createCensusAddressProvider();
+
 /** Vite plugin: last-resort place search over the public Nominatim instance. */
-export function geocodeProxy({ search = fetchNominatimSearch } = {}) {
+export function geocodeProxy({
+  search = fetchNominatimSearch,
+  addressSearch = fetchCensusAddress,
+} = {}) {
   const limiter = makeRateLimiter({
     windowMs: 60_000,
     max: 30,
@@ -188,6 +234,40 @@ export function geocodeProxy({ search = fetchNominatimSearch } = {}) {
   });
 
   function install(middlewares) {
+    middlewares.use('/api/address-geocode', async (req, res) => {
+      const reply = (status, body, headers = {}) => {
+        res.writeHead(status, { 'Content-Type': 'application/json', ...headers });
+        res.end(JSON.stringify(body));
+      };
+      if (req.method !== 'GET')
+        return reply(405, { error: 'Method Not Allowed' });
+      if (!limiter(clientKey(req)))
+        return reply(429, { error: 'Rate limit exceeded' }, { 'Retry-After': '10' });
+      const query = String(
+        new URL(req.url || '', 'http://localhost').searchParams.get('q') || '',
+      ).trim();
+      if (
+        !query ||
+        query.length > NOMINATIM_SEARCH_MAX_QUERY ||
+        !isStreetAddressQuery(query)
+      )
+        return reply(400, { error: 'A street address query is required' });
+      try {
+        const payload = await addressSearch(query);
+        if (res.writableEnded) return;
+        reply(
+          200,
+          { status: payload.status, results: payload.results },
+          { 'Cache-Control': payload.cached ? 'public, max-age=60' : 'no-store' },
+        );
+      } catch {
+        if (!res.writableEnded)
+          reply(503, { error: 'Address search is temporarily unavailable' }, {
+            'Cache-Control': 'no-store',
+          });
+      }
+    });
+
     middlewares.use('/api/geocode', async (req, res) => {
       if (req.method !== 'GET') {
         res.writeHead(405, { 'Content-Type': 'application/json' });
